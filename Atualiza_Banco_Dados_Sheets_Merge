@@ -1,0 +1,186 @@
+# ### Atualiza tabela SQL a partir de um Sheets
+# Programa responsável por:
+# - Consulta uma planilha no Google Sheets
+# - Atualizar uma no banco de dados que contem essas informações
+
+# #### Bibliotecas utilizadas
+
+import os
+import pyodbc
+import pygsheets
+import traceback
+import pandas as pd
+from datetime import datetime, date
+from sqlalchemy import create_engine
+
+print('Bibliotecas importadas')
+
+
+# #### Credenciais de acesso ao banco
+
+server = 'nome_serevidor'
+database = 'nome_base_de_dados'
+username = 'usuario'
+password = 'senha'  
+driver= 'driver_sql'
+
+print('Credenciais de acesso ao banco criadas')
+
+
+# #### Consulta da planilha no Google Sheets
+# Bloco de código responsável por consultar determinada planilha no Google Sheets
+
+# caminho do arquivo json do gogle sheets
+gc = pygsheets.authorize(service_file=r"diretorio/arquivo.json")
+
+# id da planilha utilizada
+spreadsheet_id = "id_planilha_online" 
+sheet = gc.open_by_key(spreadsheet_id)
+
+# aba que será consultada
+nome_da_aba = "nome_da_aba" 
+worksheet = sheet.worksheet_by_title(nome_da_aba)
+
+# obtem os dados da planilha
+df_Google = worksheet.get_as_df()
+
+print('Google Sheets consultado')
+
+
+# #### Tratamento do dataframe df_Google
+# Bloco de código responsável por separar as colunas que serão utilizadas e padronizar o tipo de dados, para nos proximos blocos ser realizado um merge
+
+# selecionando apenas as colunas que eu quero
+df_Google = df_Google.iloc[:, 0:9]
+
+# renomeia as colunas do dataframe
+df_Google.columns = [
+    'coluna1','coluna2','coluna3',
+    'coluna4','coluna5','coluna6',
+    'coluna7','coluna8','coluna9'
+] 
+
+# padroniza os dados e tipos de dados
+df_Google = df_Google.astype(str).apply(lambda x: x.str.strip())
+
+print('Dados google padronizados')
+
+
+# #### Conteúdo já existente no SQL
+# Bloco de código que todas as informações contidas na tabela do SQL. O dataframe criado nessa etapa, será utilizado para realização de um merge mais a frente
+
+# conecta ao banco de dados
+con = pyodbc.connect('DRIVER='+driver+';SERVER='+server+';DATABASE='+database+';UID='+username+';PWD='+password)
+
+# query que será utilizada
+query1 = """
+select 
+    [coluna1], 
+    [coluna2], 
+    [coluna3], 
+    [coluna4], 
+    [coluna5], 
+    [coluna6], 
+    [coluna7],
+    [coluna8],
+    [coluna9]
+from [TABELA] with(nolock)
+"""
+
+# realiza a consulta e carrega um dataframe
+df_dados = pd.read_sql_query(query1, con)
+
+# padroniza os dados da consulta realizada
+df_dados = df_dados.astype(str).apply(lambda x: x.str.strip())
+
+print('Consulta realizada e dataframe criado')
+
+
+# #### Diferença encontrada
+# Bloco de código responsável por fazer uma verificação do que tem no google sheets e ainda não tem no sql
+
+# cria uma mascara para identificar o que possui em um dataframe e nao possui no outro
+mascara = df_Google.apply(tuple, axis=1).isin(df_dados.apply(tuple, axis=1))
+
+# filtra apenas o que foi encontrado de novo no df_Google
+df_resultado = df_Google[~mascara]
+
+print('Diferença encontrada')
+
+
+# #### Tratamento dos dados
+# Bloco de código responsável por realizar o tratamento do dataframe criado antes de realizar o upload para o banco de dados
+
+# cria uma copia do dataframe
+df_resultado = df_resultado.copy()
+
+# transforma o tipo de dados da coluna9 para datetime
+df_resultado.loc[:, 'coluna9'] = pd.to_datetime(df_resultado['coluna9'], errors='coerce').dt.strftime("%Y-%m-%d %H:%M:%S")
+
+# removo as linhas que a coluna9 está em branco
+df_resultado = df_resultado.dropna(subset=['coluna9'])
+
+# converte para int a coluna1
+df_resultado.loc[:, 'coluna1'] = df_resultado['coluna1'].astype(int)
+
+print('Dataframe tratado')
+
+
+# #### Atualização da tabela no banco de dados
+# Blodo de código que faz o upload do que foi obtido de novo, na tabela no banco de dado
+
+# objetico que realiza a conexão com o banco de dados
+con = pyodbc.connect('DRIVER='+driver+';SERVER=tcp:'+server+';PORT=1433;DATABASE='+database+';UID='+username+';PWD='+ password)
+
+# cursor que executará o comando no sql
+cursor = con.cursor()
+
+# código utilizado para dar a carga na tabela
+QueryInsert   = """ 
+INSERT INTO [TABELA]
+(   
+    [coluna1], 
+    [coluna2], 
+    [coluna3], 
+    [coluna4], 
+    [coluna5], 
+    [coluna6], 
+    [coluna7],
+    [coluna8],
+    [coluna9]
+)
+VALUES
+    (?,?,?,?,?,?,?,?,?)
+"""
+
+# retorna o tamanho do DataFrame
+x = df_resultado.shape[0] 
+print('Tamanho do DataFrame: ' + str(x))
+
+try:
+    # loop que realiza a leitura de cada linha do dataframe e insere no banco de dados
+    for row in range(0, x):
+        # executa a carga de cada linha no SQL
+        cursor.execute(QueryInsert,
+                        str(df_resultado.iloc[row,0]),
+                        str(df_resultado.iloc[row,1]),
+                        str(df_resultado.iloc[row,2]),
+                        str(df_resultado.iloc[row,3]),
+                        str(df_resultado.iloc[row,4]),
+                        str(df_resultado.iloc[row,5]),
+                        str(df_resultado.iloc[row,6]),
+                        str(df_resultado.iloc[row,7]),
+                        str(df_resultado.iloc[row,8]));
+    
+    print('Tabela Carregada')
+    
+except Exception as e:
+    print(f'Erro: {e}')
+    original_traceback = traceback.format_exc()
+    print(f'Traceback: {original_traceback}')
+
+# finaliza a execução da consulta
+con.commit()
+con.close()
+
+
