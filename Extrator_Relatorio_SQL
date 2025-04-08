@@ -1,0 +1,229 @@
+# ### Extrator Base Sanitização
+# Programa responsável por:
+# - Realizar a consulta no banco de dados da base de dados
+# - Exportar para Excel
+# - Enviar para alguns emails cadastrados em uma planilha online (google sheets)
+
+# #### Bibliotecas utilizadas
+
+import os
+import time
+import pyodbc
+import chardet
+import datetime
+import pygsheets
+import pandas as pd
+from datetime import date, timedelta
+from sqlalchemy import create_engine
+from openpyxl import Workbook, load_workbook
+
+print('Bibliotecas importadas')
+
+
+# #### Funções utilizadas
+# Bloco de código responsável pela definição das funções que serão utilizadas no programa
+
+# função que detecta a codificação do arquivo
+def detect_encoding(file_path):
+    
+    with open(file_path, 'rb') as file:
+        result = chardet.detect(file.read())
+        return result['encoding']
+
+# função que exporta o que está escrito no arquivo txt para uma variável
+def read_txt_to_string(file_path):
+    
+    try:
+        # Detecta a codificação automaticamente
+        encoding = detect_encoding(file_path)
+        # print(f"Usando a codificação: {encoding}")
+        with open(file_path, 'r', encoding=encoding, errors='strict') as file:
+            content = file.read()
+        return content
+    except Exception as e:
+        print(f"Erro ao ler o arquivo: {e}")
+
+# função que executa uma query no sql e armazena em um dataframe
+def fetch_data_from_sql(query, driver, server, database, username, password):
+    try:
+        # Conectar ao banco de dados
+        con = pyodbc.connect(f'DRIVER={driver};SERVER=tcp:{server};PORT=1433;DATABASE={database};UID={username};PWD={password}')
+        cursor = con.cursor()
+        
+        # Executar a consulta
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        # Criar DataFrame
+        columns = [column[0] for column in cursor.description]
+        df = pd.DataFrame.from_records(results, columns=columns)
+        
+        print('Dataframe carregado')
+        return df
+    
+    except Exception as e:
+        print(f'Erro ao executar a consulta: {e}')
+        return None
+    
+    finally:
+        # Fechar a conexão
+        if 'con' in locals():
+            con.close()
+
+print('Funções criadas')
+
+
+# #### Credenciais de acesso ao banco
+
+SERVER   = 'nome_servidor'
+DATABASE = 'nome_base_de_dados'
+DRIVER   = 'driver_sql'
+USERNAME = 'usuario'
+PASSWORD = 'senha'
+
+print('Credenciais de acesso criadas')
+
+
+# #### Queries Utilizadas
+# Bloco de código responsável por consultar os arquivos .txt contendo as queries sql que serão utilizadas
+
+# local em que as queries estão salvas
+caminho_consulta = r"diretorio\consulta.txt"
+
+# salva as queries em variaveis
+query_consulta = read_txt_to_string(caminho_consulta)
+
+print("Queries criadas")
+
+
+# #### Consulta no banco de dados
+# Bloco de código responsável por realizar a consulta das queries obtidas acima
+
+# execução das consultas no banco de dados
+df_dados = fetch_data_from_sql(query_consulta, DRIVER, SERVER, DATABASE, USERNAME, PASSWORD)
+
+print('Consultas realizadas')
+
+
+# #### Salvamento do arquivo
+# Bloco de código responsável por realizar o salvamento dos dataframes em excel
+
+# data de hoje
+data = datetime.date.today()
+
+# caminhos em que os arquivos serão salvos
+caminho  = fr'diretorio\nome_arquivo {data}.xlsx'
+
+# exportação dos dataframes para excel
+with pd.ExcelWriter(caminho) as writer:
+    df_dados.to_excel(writer, sheet_name = 'Dados', index=False)
+
+print('Arquivos excel criados')
+
+
+# #### Endereços de email
+# Bloco de código que obtem quais emails irão receber as bases
+
+# caminho do arquivo json do gogle sheets
+gc = pygsheets.authorize(service_file="diretorio/arquivo.json")
+
+# id da planilha utilizada
+spreadsheet_id = "id_planilha_online" 
+sheet = gc.open_by_key(spreadsheet_id)
+
+# nome da planilha
+nome_da_aba = "nome_da_aba" 
+worksheet = sheet.worksheet_by_title(nome_da_aba)
+
+# obtem os dados da planilha
+data = worksheet.get_as_df()
+
+# transforma a coluna EMAIL do Dataframe em uma lista
+lista_email = data.Email.tolist()
+
+print('Endereços de Email consultados')
+
+
+# #### Envio dos emails
+# Bloco de código responsável pelo envio dos emails. Esse extrator, irá enviar um email para cada arquivo excel
+
+# Bibliotecas utilizadas
+import smtplib
+import os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+import locale
+import datetime
+
+# informações que serão usadas no corpo do e-mail
+data_hoje = datetime.datetime.today()
+data_hoje_formatada = data_hoje.strftime('%d/%m/%Y')
+locale.setlocale(locale.LC_ALL, 'pt_BR.utf8')
+
+# informações de login para o e-mail utilizado para envio
+usuario = "email"
+senha = "senha"
+email_from = "email"
+emails_to = lista_email  # lista de e-mails dos destinatários
+
+# caminho em que estão salvos os arquivos
+caminho_arquivo = r'diretorio\Planilhas'
+
+# Diretório em que estão salvos os arquivos
+arquivos = os.listdir(caminho_arquivo)
+
+# Criar a mensagem de e-mail
+mail_subject = f"Extrator Relatório Diário - {data_hoje_formatada}"
+mail_body = f"""Olá, como vão?
+\nSegue anexo contendo o relatório diário.
+\n*Obs.: Não responder a este email, qualquer dúvida, procure seu gestor!*
+"""
+
+# Criar o e-mail com todos os destinatários em cópia
+mimemsg = MIMEMultipart()
+mimemsg['From'] = email_from
+mimemsg['To'] = ", ".join(emails_to)  # Insere todos os e-mails no campo "Para"
+mimemsg['Subject'] = mail_subject
+mimemsg.attach(MIMEText(mail_body, 'plain'))
+
+# Anexar todos os arquivos no e-mail
+for arquivo in arquivos:
+    mail_attachment_name = os.path.join(caminho_arquivo, arquivo)
+    with open(mail_attachment_name, "rb") as attachment:
+        mimefile = MIMEBase('application', 'octet-stream')
+        mimefile.set_payload(attachment.read())
+        encoders.encode_base64(mimefile)
+        mimefile.add_header('Content-Disposition', f"attachment; filename={arquivo}")
+        mimemsg.attach(mimefile)
+
+# Enviar o e-mail
+try:
+    connection = smtplib.SMTP(host='smtp.office365.com', port=587)
+    connection.starttls()
+    connection.login(usuario, senha)
+    connection.send_message(mimemsg)
+    connection.quit()
+    # print(f"E-mail enviado com sucesso")
+except Exception as e:
+    print(f"Falha no envio de e-mail: {e}")
+
+print("Email enviado com sucesso.")
+
+
+# #### Exclusão dos arquivos criados
+# Bloco de código responsável por realizar a exclusão dos arquivos criados ao longo do programa
+
+# exclui cada arquivo criado na pasta
+for arquivo in arquivos:
+    try:
+        os.remove(os.path.join(caminho_arquivo, arquivo))
+        print(f'Arquivo {arquivo} excluído com sucesso.')
+    except Exception as e:
+        print(f'Erro ao excluir o arquivo {arquivo}: {e}')
+
+print('Arquivos excluidos')
+
+
+
