@@ -1,0 +1,138 @@
+# ### Atualiza tabela SQL a partir de um Sheets 
+# Programa responsável por:
+# - Consulta uma planilha no Google Sheets
+# - Atualizar uma no banco de dados que contem essas informações
+
+# #### Bibliotecas utilizadas
+
+import os
+import pyodbc
+import pygsheets
+import pandas as pd
+from sqlalchemy import create_engine
+
+print('Bibliotecas importadas')
+
+
+# #### Credenciais de acesso ao banco
+
+server = 'nome_serevidor'
+database = 'nome_base_de_dados'
+username = 'usuario'
+password = 'senha'  
+driver= 'driver_sql'
+
+print('Credenciais de acesso ao banco criadas')
+
+
+# #### Consulta da planilha no Google Sheets
+# Bloco de código responsável por consultar determinada planilha no Google Sheets
+
+# caminho do arquivo json do gogle sheets
+gc = pygsheets.authorize(service_file=r"diretorio/arquivo.json")
+
+# id da planilha utilizada
+spreadsheet_id = "id_planilha_online" 
+sheet = gc.open_by_key(spreadsheet_id)
+
+# aba que será consultada
+nome_da_aba = "nome_da_aba" 
+worksheet = sheet.worksheet_by_title(nome_da_aba)
+
+# obtem os dados da planilha
+df_Google = worksheet.get_as_df()
+
+print('Google Sheets consultado')
+
+
+# #### Tratamento dos dados vindos do Sheets
+# Bloco de código responsável por realizar o tratamento dos dados vindos do google sheets para que o upload das informações seja feito de maneira correta
+
+# colunas que eu quero
+colunas = [
+    'coluna1','coluna2',
+    'coluna3','coluna4'
+]
+
+# dataframe final
+df_Google = df_Google.loc[:, colunas]
+
+# converte a coluna1 para o tipo string
+df_Google['coluna1'] = df_Google['coluna1'].astype(str)
+
+# exclui as linhas em que a coluna1 não está preenchida
+df_Google = df_Google[df_Google['coluna1'] != '']
+
+# retira as linhas onde coluna1 contém letras
+df_Google = df_Google[~df_Google['coluna1'].str.contains('[a-zA-Z]')]
+
+# exclusão das linhas que a coluna1 possui mais de 8 digitos
+df_Google = df_Google[df_Google['coluna1'].str.len() <= 8]
+
+# altera o datatype da coluna1 para inteiro
+df_Google['coluna1'] = df_Google['coluna1'].astype(int)
+
+# converte os tipos de dados da coluna2 e coluna3 para tipo data
+df_Google['coluna2'] = pd.to_datetime(df_Google['coluna2'], dayfirst=True, errors='coerce')
+df_Google['coluna3'] = pd.to_datetime(df_Google['coluna3'], dayfirst=True, errors='coerce')
+
+print('Linhas inválidas excluídas')
+
+
+# #### Atualização da tabela no banco de dados
+# Bloco de código que limpa a tabela no SQL e carrega com os dados lidos no Google Sheets
+
+# objetico que realiza a conexão com o banco de dados
+con = pyodbc.connect('DRIVER='+driver+';SERVER=tcp:'+server+';PORT=1433;DATABASE='+database+';UID='+username+';PWD='+ password)
+
+# cursor que executará o comando no sql
+cursor = con.cursor()
+
+# código utilizado para limpar a tabela antes de dar carga
+QueryTruncate = """
+TRUNCATE TABLE [TABELA]
+"""
+
+# executa o código que limpa a tabela
+cursor.execute(QueryTruncate)
+print('Tabela Limpa')
+
+# código utilizado para dar a carga na tabela
+QueryInsert   = """ 
+INSERT INTO [TABELA]
+(   
+    [coluna1], 
+    [coluna2], 
+    [coluna3], 
+    [coluna4], 
+    [coluna5], 
+    [coluna6], 
+    [coluna7], 
+    [coluna8], 
+    [coluna9]
+)
+VALUES
+    (?,?,?,?,?,?,?,?,?)
+"""
+
+# retorna o tamanho do DataFrame
+x = df_Google.shape[0] 
+print('Tamanho do DataFrame: ' + str(x))
+        
+# loop que realiza a leitura de cada linha do dataframe e insere no banco de dados
+for row in range(0, x):
+    # executa a carga de cada linha no SQL
+    cursor.execute(QueryInsert,
+                    str(df_Google.iloc[row,0]),
+                    str(df_Google.iloc[row,1]),
+                    str(df_Google.iloc[row,2]),
+                    str(df_Google.iloc[row,3]));
+
+print('Tabela Carregada')
+
+# finaliza a execução da consulta
+con.commit()
+con.close()
+
+
+
